@@ -1,0 +1,14 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    level: 8
+
+    paths:
+        - app/
+        - Modules/
+
+    excludePaths:
+        - Modules/*/vite.config.js
+        - Modules/*/resources/*
+
