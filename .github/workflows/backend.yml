@@ -15,10 +15,6 @@ concurrency:
 permissions:
   contents: read
 
-defaults:
-  run:
-    working-directory: backend
-
 jobs:
   quality:
     name: Lint, static analysis, tests, migrations
@@ -70,7 +66,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.composer/cache/files
-          key: composer-${{ hashFiles('backend/composer.lock') }}
+          key: composer-${{ hashFiles('composer.lock') }}
           restore-keys: composer-
 
       - name: Install dependencies
