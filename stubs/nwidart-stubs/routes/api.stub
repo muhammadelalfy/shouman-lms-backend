@@ -1,0 +1,7 @@
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+/*
+ * Routes are registered under the /api/v1 prefix with the "api.v1." name prefix.
+ */

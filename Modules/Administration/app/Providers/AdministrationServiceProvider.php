@@ -26,4 +26,3 @@ class AdministrationServiceProvider extends ModuleServiceProvider
         RouteServiceProvider::class,
     ];
 }
-

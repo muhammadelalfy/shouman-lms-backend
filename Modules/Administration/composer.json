@@ -1,0 +1,30 @@
+{
+    "name": "lms/administration",
+    "description": "",
+    "authors": [
+        {
+            "name": "LMS Engineering",
+            "email": "engineering@example.com"
+        }
+    ],
+    "extra": {
+        "laravel": {
+            "providers": [],
+            "aliases": {
+
+            }
+        }
+    },
+    "autoload": {
+        "psr-4": {
+            "Modules\\Administration\\": "app/",
+            "Modules\\Administration\\Database\\Factories\\": "database/factories/",
+            "Modules\\Administration\\Database\\Seeders\\": "database/seeders/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\Administration\\Tests\\": "tests/"
+        }
+    }
+}

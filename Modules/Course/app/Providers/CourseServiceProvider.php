@@ -43,4 +43,3 @@ class CourseServiceProvider extends ModuleServiceProvider
         RateLimiter::for('catalog', fn (Request $request) => Limit::perMinute(120)->by('catalog:'.$request->ip()));
     }
 }
-

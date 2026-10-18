@@ -11,4 +11,3 @@ parameters:
     excludePaths:
         - Modules/*/vite.config.js
         - Modules/*/resources/*
-
