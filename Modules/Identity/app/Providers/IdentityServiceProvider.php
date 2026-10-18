@@ -92,4 +92,3 @@ class IdentityServiceProvider extends ModuleServiceProvider
         RateLimiter::for('identity.register', fn (Request $request) => Limit::perMinute(10)->by('register-ip:'.$request->ip()));
     }
 }
-

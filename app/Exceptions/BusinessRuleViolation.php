@@ -37,4 +37,3 @@ abstract class BusinessRuleViolation extends DomainException
         return false;
     }
 }
-
