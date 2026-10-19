@@ -13,6 +13,7 @@ use Modules\Course\Models\Subject;
 use Modules\Course\Tests\Concerns\BuildsOfferings;
 use Modules\Identity\Enums\Role;
 use Modules\Identity\Tests\Concerns\CreatesUsers;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class CatalogOfferingControllerTest extends TestCase
@@ -20,6 +21,130 @@ class CatalogOfferingControllerTest extends TestCase
     use BuildsOfferings, CreatesUsers, RefreshDatabase;
 
     private const string URL = '/api/v1/catalog/offerings';
+
+    public function test_searches_arabic_and_case_insensitive_latin_titles_only(): void
+    {
+        $arabic = $this->visibleOffering(['title' => 'دروس العقيدة للمبتدئين']);
+        $latin = $this->visibleOffering(['title' => 'Learning FIQH Together']);
+        $this->visibleOffering(['title' => 'Unrelated', 'summary' => 'العقيدة fiqh']);
+
+        $this->getJson(self::URL.'?'.http_build_query(['q' => 'العقيدة']))->assertOk()
+            ->assertJsonPath('data.*.id', [$arabic->id]);
+        $this->getJson(self::URL.'?q=fiqh')->assertOk()->assertJsonPath('data.*.id', [$latin->id]);
+        $this->getJson(self::URL.'?q=no-match')->assertOk()->assertJsonCount(0, 'data');
+    }
+
+    public function test_search_keeps_public_visibility_and_exact_window_boundaries(): void
+    {
+        $this->travelTo(now()->startOfSecond());
+        $visible = $this->visibleOffering(['title' => 'Needle', 'visible_from' => now(), 'visible_until' => now()->addSecond()]);
+        $this->visibleOffering(['title' => 'Needle', 'visible_from' => now()->addSecond()]);
+        $this->visibleOffering(['title' => 'Needle', 'visible_until' => now()]);
+        Offering::factory()->create(['title' => 'Needle']);
+        Offering::factory()->hidden()->create(['title' => 'Needle']);
+        Offering::factory()->published()->create(['title' => 'Needle', 'status' => 'archived']);
+        $this->visibleOffering(['title' => 'Other']);
+
+        $this->getJson(self::URL.'?q=needle')->assertOk()->assertJsonPath('data.*.id', [$visible->id]);
+    }
+
+    #[DataProvider('emptySearchQueries')]
+    public function test_empty_search_equals_the_unfiltered_catalog(string $query): void
+    {
+        $this->visibleOffering();
+        $this->visibleOffering();
+        $baseline = $this->getJson(self::URL)->assertOk()->json('data');
+
+        $this->assertSame($baseline, $this->getJson(self::URL.'?'.http_build_query(['q' => $query]))->assertOk()->json('data'));
+    }
+
+    /** @return array<string, array{string}> */
+    public static function emptySearchQueries(): array
+    {
+        return ['empty' => [''], 'ascii' => [" \t\r\n"], 'unicode' => ["\u{00A0}\u{0085}\u{2007}\u{202F}\u{3000}"]];
+    }
+
+    #[DataProvider('validSearchQueries')]
+    public function test_normalizes_only_unicode_whitespace_and_accepts_120_code_points(string $query, string $title): void
+    {
+        $match = $this->visibleOffering(['title' => $title]);
+        $this->visibleOffering(['title' => 'Unrelated']);
+        $this->visibleOffering(['title' => 'Needle']);
+
+        $this->getJson(self::URL.'?'.http_build_query(['q' => $query]))->assertOk()->assertJsonPath('data.*.id', [$match->id]);
+    }
+
+    /** @return array<string, array{string, string}> */
+    public static function validSearchQueries(): array
+    {
+        return [
+            'arabic' => ["\u{00A0}".str_repeat('ع', 120)."\u{3000}", str_repeat('ع', 120)],
+            'supplementary' => ["\u{0085}".str_repeat('😀', 120)."\u{202F}", str_repeat('😀', 120)],
+            'internal spaces' => ["\u{2000}a  b\u{205F}", 'a  b'],
+            'zero remains a query' => ['0', 'Course 0'],
+            'zero width space is literal' => ["\u{200B}Needle\u{200B}", "\u{200B}Needle\u{200B}"],
+            'BOM is literal' => ["\u{FEFF}Needle\u{FEFF}", "\u{FEFF}Needle\u{FEFF}"],
+        ];
+    }
+
+    #[DataProvider('invalidSearchQueries')]
+    public function test_rejects_invalid_search_with_422(mixed $query): void
+    {
+        $this->getJson(self::URL.'?'.http_build_query(['q' => $query]))->assertUnprocessable()->assertJsonValidationErrors('q');
+    }
+
+    /** @return array<string, array{mixed}> */
+    public static function invalidSearchQueries(): array
+    {
+        return [
+            '121 arabic' => [str_repeat('ع', 121)],
+            '121 supplementary' => [str_repeat('😀', 121)],
+            'array' => [['needle']],
+            'nested object' => [['nested' => ['needle']]],
+        ];
+    }
+
+    #[DataProvider('literalSearchQueries')]
+    public function test_search_treats_pattern_and_sql_characters_literally(string $query): void
+    {
+        $match = $this->visibleOffering(['title' => 'Before '.$query.' after']);
+        $this->visibleOffering(['title' => 'Ordinary title']);
+        $this->visibleOffering(['title' => 'Before XY after']);
+        Offering::factory()->hidden()->create(['title' => $query]);
+
+        $this->getJson(self::URL.'?'.http_build_query(['q' => $query]))->assertOk()->assertJsonPath('data.*.id', [$match->id]);
+    }
+
+    /** @return array<string, array{string}> */
+    public static function literalSearchQueries(): array
+    {
+        return ['percent' => ['%'], 'underscore' => ['_'], 'backslash' => ['\\'], 'escape' => ['!'], 'combined' => ['!%_\\'], 'sql' => ["%' OR 1=1 --"]];
+    }
+
+    public function test_search_combines_filters_and_preserves_them_across_three_cursor_pages(): void
+    {
+        $attributes = ['title' => 'العقيدة 100%', 'pricing' => 'free', 'is_featured' => true];
+        $first = $this->visibleOffering($attributes, OfferingKind::Track);
+        $second = $this->visibleOffering($attributes, OfferingKind::Track);
+        $third = $this->visibleOffering($attributes, OfferingKind::Track);
+        $this->visibleOffering($attributes);
+        $this->visibleOffering(array_replace($attributes, ['pricing' => 'paid', 'price_amount' => 1000, 'currency' => 'EGP']), OfferingKind::Track);
+        $this->visibleOffering(array_replace($attributes, ['is_featured' => false]), OfferingKind::Track);
+        $this->visibleOffering(array_replace($attributes, ['title' => 'Unrelated']), OfferingKind::Track);
+        $filters = ['q' => 'العقيدة 100%', 'kind' => 'track', 'pricing' => 'free', 'featured' => '1', 'per_page' => '1'];
+
+        $page1 = $this->getJson(self::URL.'?'.http_build_query($filters))->assertOk()->assertJsonPath('data.*.id', [$third->id]);
+        $next = $page1->json('links.next');
+        parse_str((string) parse_url($next, PHP_URL_QUERY), $query);
+        $this->assertSame($filters, array_intersect_key($query, $filters));
+        $this->assertNotEmpty($query['cursor']);
+        $page2 = $this->getJson($next)->assertOk()->assertJsonPath('data.*.id', [$second->id]);
+        $next = $page2->json('links.next');
+        parse_str((string) parse_url($next, PHP_URL_QUERY), $query);
+        $this->assertSame($filters, array_intersect_key($query, $filters));
+        $page3 = $this->getJson($next)->assertOk()->assertJsonPath('data.*.id', [$first->id])->assertJsonPath('links.next', null);
+        $this->getJson($page3->json('links.prev'))->assertOk()->assertJsonPath('data.*.id', [$second->id]);
+    }
 
     public function test_lists_only_publicly_visible_offerings_to_guests(): void
     {

@@ -24,6 +24,10 @@ final class CatalogOfferingController extends Controller
     {
         $offerings = Offering::query()
             ->publiclyVisible()
+            ->when($request->searchQuery() !== null, function (Builder $query) use ($request): void {
+                $pattern = strtr($request->searchQuery() ?? '', ['!' => '!!', '%' => '!%', '_' => '!_']);
+                $query->whereRaw("title ILIKE ? ESCAPE '!'", ['%'.$pattern.'%']);
+            })
             ->withCount(['lessons as published_lessons_count' => fn (Builder $query) => $query
                 ->where('lessons.status', ContentStatus::Published)
                 ->where('subjects.status', ContentStatus::Published)])
