@@ -22,15 +22,16 @@ class CatalogOfferingControllerTest extends TestCase
 
     private const string URL = '/api/v1/catalog/offerings';
 
-    public function test_searches_arabic_and_case_insensitive_latin_titles_only(): void
+    public function test_searches_arabic_and_case_insensitive_latin_public_text(): void
     {
         $arabic = $this->visibleOffering(['title' => 'دروس العقيدة للمبتدئين']);
         $latin = $this->visibleOffering(['title' => 'Learning FIQH Together']);
-        $this->visibleOffering(['title' => 'Unrelated', 'summary' => 'العقيدة fiqh']);
+        $summary = $this->visibleOffering(['title' => 'Unrelated', 'summary' => 'العقيدة fiqh']);
+        $description = $this->visibleOffering(['title' => 'Other', 'description' => 'العقيدة FIQH']);
 
         $this->getJson(self::URL.'?'.http_build_query(['q' => 'العقيدة']))->assertOk()
-            ->assertJsonPath('data.*.id', [$arabic->id]);
-        $this->getJson(self::URL.'?q=fiqh')->assertOk()->assertJsonPath('data.*.id', [$latin->id]);
+            ->assertJsonPath('data.*.id', [$description->id, $summary->id, $arabic->id]);
+        $this->getJson(self::URL.'?q=fiqh')->assertOk()->assertJsonPath('data.*.id', [$description->id, $summary->id, $latin->id]);
         $this->getJson(self::URL.'?q=no-match')->assertOk()->assertJsonCount(0, 'data');
     }
 
@@ -105,9 +106,9 @@ class CatalogOfferingControllerTest extends TestCase
     }
 
     #[DataProvider('literalSearchQueries')]
-    public function test_search_treats_pattern_and_sql_characters_literally(string $query): void
+    public function test_search_treats_pattern_and_sql_characters_literally(string $query, string $field): void
     {
-        $match = $this->visibleOffering(['title' => 'Before '.$query.' after']);
+        $match = $this->visibleOffering(['title' => 'Ordinary title', $field => 'Before '.$query.' after']);
         $this->visibleOffering(['title' => 'Ordinary title']);
         $this->visibleOffering(['title' => 'Before XY after']);
         Offering::factory()->hidden()->create(['title' => $query]);
@@ -115,22 +116,29 @@ class CatalogOfferingControllerTest extends TestCase
         $this->getJson(self::URL.'?'.http_build_query(['q' => $query]))->assertOk()->assertJsonPath('data.*.id', [$match->id]);
     }
 
-    /** @return array<string, array{string}> */
+    /** @return array<string, array{string, string}> */
     public static function literalSearchQueries(): array
     {
-        return ['percent' => ['%'], 'underscore' => ['_'], 'backslash' => ['\\'], 'escape' => ['!'], 'combined' => ['!%_\\'], 'sql' => ["%' OR 1=1 --"]];
+        $cases = [];
+        foreach (['title', 'summary', 'description'] as $field) {
+            foreach (['percent' => '%', 'underscore' => '_', 'backslash' => '\\', 'escape' => '!', 'combined' => '!%_\\', 'slash operators' => '\\%\\_', 'trailing slash' => 'end\\', 'sql' => "%' OR 1=1 --"] as $name => $query) {
+                $cases[$field.' '.$name] = [$query, $field];
+            }
+        }
+
+        return $cases;
     }
 
     public function test_search_combines_filters_and_preserves_them_across_three_cursor_pages(): void
     {
-        $attributes = ['title' => 'العقيدة 100%', 'pricing' => 'free', 'is_featured' => true];
+        $attributes = ['title' => 'Other', 'summary' => 'العقيدة 100%', 'pricing' => 'free', 'is_featured' => true];
         $first = $this->visibleOffering($attributes, OfferingKind::Track);
         $second = $this->visibleOffering($attributes, OfferingKind::Track);
         $third = $this->visibleOffering($attributes, OfferingKind::Track);
         $this->visibleOffering($attributes);
         $this->visibleOffering(array_replace($attributes, ['pricing' => 'paid', 'price_amount' => 1000, 'currency' => 'EGP']), OfferingKind::Track);
         $this->visibleOffering(array_replace($attributes, ['is_featured' => false]), OfferingKind::Track);
-        $this->visibleOffering(array_replace($attributes, ['title' => 'Unrelated']), OfferingKind::Track);
+        $this->visibleOffering(array_replace($attributes, ['summary' => 'Unrelated']), OfferingKind::Track);
         $filters = ['q' => 'العقيدة 100%', 'kind' => 'track', 'pricing' => 'free', 'featured' => '1', 'per_page' => '1'];
 
         $page1 = $this->getJson(self::URL.'?'.http_build_query($filters))->assertOk()->assertJsonPath('data.*.id', [$third->id]);
@@ -144,6 +152,28 @@ class CatalogOfferingControllerTest extends TestCase
         $this->assertSame($filters, array_intersect_key($query, $filters));
         $page3 = $this->getJson($next)->assertOk()->assertJsonPath('data.*.id', [$first->id])->assertJsonPath('links.next', null);
         $this->getJson($page3->json('links.prev'))->assertOk()->assertJsonPath('data.*.id', [$second->id]);
+    }
+
+    public function test_wide_search_excludes_hidden_or_expired_branches_and_numeric_ids(): void
+    {
+        $visible = $this->visibleOffering(['title' => 'Other', 'summary' => null, 'description' => 'Wide needle']);
+        $this->visibleOffering(['title' => 'Other', 'summary' => 'needle', 'visible_until' => now()]);
+        $this->visibleOffering(['title' => 'Other', 'description' => 'needle', 'visible_from' => now()->addDay()]);
+        Offering::factory()->hidden()->create(['summary' => 'needle']);
+        Offering::factory()->create(['description' => 'needle']);
+        $this->getJson(self::URL.'?q=needle')->assertOk()->assertJsonPath('data.*.id', [$visible->id]);
+        $this->getJson(self::URL.'?q='.$visible->id)->assertOk()->assertJsonCount(0, 'data');
+    }
+
+    public function test_wide_search_rechecks_publication_between_cursor_pages(): void
+    {
+        $oldest = $this->visibleOffering(['title' => 'Other', 'summary' => 'needle']);
+        $middle = $this->visibleOffering(['title' => 'Other', 'description' => 'needle']);
+        $latest = $this->visibleOffering(['title' => 'Needle']);
+        $page = $this->getJson(self::URL.'?q=needle&per_page=1')->assertOk()->assertJsonPath('data.*.id', [$latest->id]);
+        $this->assertNotNull($page->json('links.next'));
+        $middle->forceFill(['status' => 'hidden'])->save();
+        $this->getJson($page->json('links.next'))->assertOk()->assertJsonPath('data.*.id', [$oldest->id]);
     }
 
     public function test_lists_only_publicly_visible_offerings_to_guests(): void

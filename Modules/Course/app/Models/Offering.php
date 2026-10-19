@@ -15,6 +15,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Support\Carbon;
+use Laravel\Scout\Engines\DatabaseEngine;
+use Laravel\Scout\Searchable;
 use Modules\Course\Contracts\Publishable;
 use Modules\Course\Database\Factories\OfferingFactory;
 use Modules\Course\Enums\ContentStatus;
@@ -67,7 +69,22 @@ use Modules\Identity\Models\User;
 class Offering extends Model implements Publishable
 {
     /** @use HasFactory<OfferingFactory> */
-    use HasFactory, HasPublicationLifecycle;
+    use HasFactory, HasPublicationLifecycle, Searchable;
+
+    /** @return array{title: string|null, summary: string|null, description: string|null} */
+    public function toSearchableArray(): array
+    {
+        return [
+            'title' => $this->title,
+            'summary' => $this->summary,
+            'description' => $this->description,
+        ];
+    }
+
+    public function searchableUsing(): DatabaseEngine
+    {
+        return app(DatabaseEngine::class);
+    }
 
     /**
      * @var array<string, mixed>

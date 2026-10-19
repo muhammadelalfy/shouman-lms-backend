@@ -13,6 +13,7 @@ use Modules\Course\Http\Requests\Catalog\ListCatalogOfferingsRequest;
 use Modules\Course\Http\Resources\Catalog\CatalogOfferingDetailResource;
 use Modules\Course\Http\Resources\Catalog\CatalogOfferingResource;
 use Modules\Course\Models\Offering;
+use Modules\Course\Search\CatalogDatabaseSearchEngine;
 
 /**
  * Public, unauthenticated reads. Visibility is enforced in every query here;
@@ -22,12 +23,14 @@ final class CatalogOfferingController extends Controller
 {
     public function index(ListCatalogOfferingsRequest $request): AnonymousResourceCollection
     {
-        $offerings = Offering::query()
-            ->publiclyVisible()
-            ->when($request->searchQuery() !== null, function (Builder $query) use ($request): void {
-                $pattern = strtr($request->searchQuery() ?? '', ['!' => '!!', '%' => '!%', '_' => '!_']);
-                $query->whereRaw("title ILIKE ? ESCAPE '!'", ['%'.$pattern.'%']);
-            })
+        $search = $request->searchQuery();
+        $query = $search === null
+            ? Offering::query()
+            : app(CatalogDatabaseSearchEngine::class)->queryFor(Offering::search(
+                strtr($search, ['\\' => '\\\\', '%' => '\\%', '_' => '\\_']),
+            ));
+
+        $offerings = $query->publiclyVisible()
             ->withCount(['lessons as published_lessons_count' => fn (Builder $query) => $query
                 ->where('lessons.status', ContentStatus::Published)
                 ->where('subjects.status', ContentStatus::Published)])
