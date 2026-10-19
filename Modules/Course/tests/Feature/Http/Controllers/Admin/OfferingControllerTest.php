@@ -16,6 +16,7 @@ use Modules\Course\Models\Subject;
 use Modules\Course\Tests\Concerns\BuildsOfferings;
 use Modules\Identity\Enums\Role;
 use Modules\Identity\Tests\Concerns\CreatesUsers;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Tests\TestCase;
 
 class OfferingControllerTest extends TestCase
@@ -86,10 +87,134 @@ class OfferingControllerTest extends TestCase
             ->assertJsonPath('data.kind', 'track')
             ->assertJsonPath('data.slug', 'مسار-أذن-خير')
             ->assertJsonPath('data.status', 'draft')
+            ->assertJsonPath('data.starts_at', null)
+            ->assertJsonPath('data.ends_at', null)
+            ->assertJsonPath('data.visible_from', null)
+            ->assertJsonPath('data.visible_until', null)
             ->assertJsonPath('data.goals', ['التوبة', 'القرب من الله'])
             ->assertJsonPath('data.pricing.model', 'free')
             ->assertJsonPath('data.pricing.final_price_amount', null);
         $this->assertDatabaseHas('offerings', ['slug' => 'مسار-أذن-خير', 'status' => 'draft', 'published_at' => null]);
+    }
+
+    /**
+     * @return array<string, array{string, string}>
+     */
+    public static function timestampOffsets(): array
+    {
+        return [
+            'positive offset' => ['+03:00', '07:00:00'],
+            'negative offset' => ['-04:00', '14:00:00'],
+        ];
+    }
+
+    #[DataProvider('timestampOffsets')]
+    public function test_store_preserves_offset_timestamp_instants(string $offset, string $utcTime): void
+    {
+        $this->actingAsManager();
+        $timestamps = [
+            'starts_at' => '2026-10-20T10:00:00'.$offset,
+            'ends_at' => '2026-10-21T10:00:00'.$offset,
+            'visible_from' => '2026-10-19T10:00:00'.$offset,
+            'visible_until' => '2026-10-22T10:00:00'.$offset,
+        ];
+
+        $response = $this->postJson(self::URL, $this->payload($timestamps))->assertCreated();
+        $id = $response->json('data.id');
+        $persisted = $this->getJson(self::URL."/{$id}")->assertOk();
+
+        foreach (['starts_at' => '20', 'ends_at' => '21', 'visible_from' => '19', 'visible_until' => '22'] as $field => $day) {
+            $expected = "2026-10-{$day}T{$utcTime}+00:00";
+            $response->assertJsonPath('data.'.$field, $expected);
+            $persisted->assertJsonPath('data.'.$field, $expected);
+            $this->assertDatabaseHas('offerings', ['id' => $id, $field => "2026-10-{$day} {$utcTime}"]);
+        }
+    }
+
+    #[DataProvider('timestampOffsets')]
+    public function test_update_preserves_offset_timestamp_instants_through_round_trip(string $offset, string $utcTime): void
+    {
+        $this->actingAsManager();
+        $offering = Offering::factory()->kind(OfferingKind::Track)->create();
+        $timestamps = [
+            'starts_at' => '2026-10-20T10:00:00'.$offset,
+            'ends_at' => '2026-10-21T10:00:00'.$offset,
+            'visible_from' => '2026-10-19T10:00:00'.$offset,
+            'visible_until' => '2026-10-22T10:00:00'.$offset,
+        ];
+        $payload = $this->payload($timestamps);
+        unset($payload['kind']);
+
+        $this->putJson(self::URL."/{$offering->id}", $payload)->assertOk();
+        $persisted = $this->getJson(self::URL."/{$offering->id}")->assertOk();
+        foreach (['starts_at' => '20', 'ends_at' => '21', 'visible_from' => '19', 'visible_until' => '22'] as $field => $day) {
+            $expected = "2026-10-{$day}T{$utcTime}+00:00";
+            $persisted->assertJsonPath('data.'.$field, $expected);
+            $this->assertDatabaseHas('offerings', ['id' => $offering->id, $field => "2026-10-{$day} {$utcTime}"]);
+            $payload[$field] = $persisted->json('data.'.$field);
+        }
+
+        $this->putJson(self::URL."/{$offering->id}", [...$payload, 'title' => 'عنوان جديد'])->assertOk();
+        $roundTrip = $this->getJson(self::URL."/{$offering->id}")->assertOk();
+        foreach (array_keys($timestamps) as $field) {
+            $roundTrip->assertJsonPath('data.'.$field, $payload[$field]);
+        }
+
+        $this->putJson(self::URL."/{$offering->id}", [...$payload, ...array_fill_keys(array_keys($timestamps), null)])->assertOk();
+        $cleared = $this->getJson(self::URL."/{$offering->id}")->assertOk();
+        foreach (array_keys($timestamps) as $field) {
+            $cleared->assertJsonPath('data.'.$field, null);
+            $this->assertDatabaseHas('offerings', ['id' => $offering->id, $field => null]);
+        }
+    }
+
+    public function test_timestamp_ordering_compares_instants_across_offsets(): void
+    {
+        $this->actingAsManager();
+        $valid = [
+            'starts_at' => '2026-10-20T10:00:00+03:00',
+            'ends_at' => '2026-10-20T08:00:00+00:00',
+            'visible_from' => '2026-10-20T10:00:00+03:00',
+            'visible_until' => '2026-10-20T08:00:00+00:00',
+        ];
+        $response = $this->postJson(self::URL, $this->payload($valid))->assertCreated();
+        $id = $response->json('data.id');
+        $update = $this->payload($valid);
+        unset($update['kind']);
+        $this->putJson(self::URL."/{$id}", $update)->assertOk();
+        $invalid = $this->payload([
+            'starts_at' => '2026-10-20T10:00:00-04:00',
+            'ends_at' => '2026-10-20T11:00:00+00:00',
+            'visible_from' => '2026-10-20T10:00:00-04:00',
+            'visible_until' => '2026-10-20T11:00:00+00:00',
+        ]);
+        $this->postJson(self::URL, $invalid)->assertUnprocessable()->assertJsonValidationErrors(['ends_at', 'visible_until']);
+        unset($invalid['kind']);
+        $this->putJson(self::URL."/{$id}", $invalid)->assertUnprocessable()->assertJsonValidationErrors(['ends_at', 'visible_until']);
+        $this->getJson(self::URL."/{$id}")->assertOk()->assertJsonPath('data.starts_at', '2026-10-20T07:00:00+00:00');
+    }
+
+    public function test_catalog_visibility_uses_persisted_offset_instants(): void
+    {
+        $this->actingAsManager();
+        $offering = $this->visibleOffering();
+        $payload = $this->payload([
+            'visible_from' => '2026-10-20T10:00:00+03:00',
+            'visible_until' => '2026-10-20T06:00:00-04:00',
+        ]);
+        unset($payload['kind']);
+        $this->putJson(self::URL."/{$offering->id}", $payload)->assertOk();
+        $url = '/api/v1/catalog/offerings/'.$offering->slug;
+
+        $this->travelTo(now()->parse('2026-10-20T06:59:59Z'));
+        $this->getJson($url)->assertNotFound();
+        $this->travelTo(now()->parse('2026-10-20T07:00:00Z'));
+        $this->getJson($url)->assertOk();
+        $this->travelTo(now()->parse('2026-10-20T09:59:59Z'));
+        $this->getJson($url)->assertOk();
+        $this->travelTo(now()->parse('2026-10-20T10:00:00Z'));
+        $this->getJson($url)->assertNotFound();
+        $this->travelBack();
     }
 
     public function test_store_appends_numeric_suffix_when_generated_slug_is_taken(): void
