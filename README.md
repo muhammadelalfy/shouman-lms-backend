@@ -7,6 +7,14 @@
 <a href="https://packagist.org/packages/laravel/framework"><img src="https://img.shields.io/packagist/l/laravel/framework" alt="License"></a>
 </p>
 
+## CI and container delivery
+
+The Backend CI workflow runs on pull requests, pushes to `main`, and manual dispatches. Composer validation, Pint, Larastan, PostgreSQL migration checks and tests, and Composer audit must pass before the Dockerfile is built. CI disables debug responses so API error assertions use the public response format.
+
+Pull requests build the container without registry login or image publication. After successful checks and a container build on `main`, a push or manual dispatch publishes `ghcr.io/<owner>/<repository>:main` and `ghcr.io/<owner>/<repository>:sha-<full-commit-sha>` to GHCR, with source and revision labels.
+
+This workflow delivers images; server deployment remains unconfigured. The existing Dockerfile uses Laravel's development server for the local Compose preview, so image publication does not validate a production runtime.
+
 ## About Laravel
 
 Laravel is a web application framework with expressive, elegant syntax. We believe development must be an enjoyable and creative experience to be truly fulfilling. Laravel takes the pain out of development by easing common tasks used in many web projects, such as:
