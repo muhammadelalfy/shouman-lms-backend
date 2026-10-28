@@ -4,9 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-    paths:
-      - "backend/**"
-      - ".github/workflows/backend.yml"
 
 concurrency:
   group: backend-${{ github.ref }}

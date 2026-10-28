@@ -6,18 +6,21 @@ namespace Modules\Identity\Services;
 
 use Illuminate\Contracts\Cache\LockProvider;
 use Illuminate\Contracts\Cache\Repository as Cache;
+use Illuminate\Support\Facades\DB;
 use LogicException;
 use Modules\Identity\Enums\Role;
 use Modules\Identity\Exceptions\IdentityRuleViolation;
 use Modules\Identity\Models\User;
+use Spatie\Permission\Models\Role as RoleModel;
 
 /**
  * Guarantees at least one active System Administrator always remains.
  *
  * Mutations that could remove an administrator (role removal, disabling) run
- * under a distributed lock so two administrators demoting each other
- * concurrently cannot both succeed. A row lock is insufficient here because
- * the role lives in a pivot table, not on the locked user row.
+ * under a distributed lock and a stable role-row transaction lock. The latter
+ * survives nested action completion until an outer CSV transaction commits,
+ * so another removal cannot count an administrator pending demotion. A user
+ * row lock alone cannot serialize role changes stored in pivot tables.
  */
 final class SystemAdministratorSafeguard
 {
@@ -43,7 +46,15 @@ final class SystemAdministratorSafeguard
             throw new LogicException('The default cache store must support atomic locks (redis, database or array).');
         }
 
-        return $store->lock(self::LOCK_KEY, self::LOCK_SECONDS)->block(self::WAIT_SECONDS, $mutation);
+        return $store->lock(self::LOCK_KEY, self::LOCK_SECONDS)->block(self::WAIT_SECONDS, fn (): mixed => DB::transaction(function () use ($mutation): mixed {
+            RoleModel::query()
+                ->where('name', Role::SystemAdministrator->value)
+                ->where('guard_name', 'web')
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            return $mutation();
+        }));
     }
 
     /**

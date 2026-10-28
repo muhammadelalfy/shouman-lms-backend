@@ -10,8 +10,10 @@ use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Str;
+use Modules\Administration\Csv\CsvRegistry;
 use Modules\Identity\Authorization\PermissionRegistry;
 use Modules\Identity\Console\CreateSystemAdministratorCommand;
+use Modules\Identity\Csv\IdentityCsvResource;
 use Modules\Identity\Enums\Permission;
 use Modules\Identity\Http\Middleware\EnsureAccountIsActive;
 use Modules\Identity\Policies\RolePolicy;
@@ -61,6 +63,12 @@ class IdentityServiceProvider extends ModuleServiceProvider
         parent::boot();
 
         $this->app->make(PermissionRegistry::class)->register(Permission::class);
+
+        $this->app->afterResolving(CsvRegistry::class, function (CsvRegistry $registry): void {
+            foreach (['users', 'roles'] as $resource) {
+                $registry->register($resource, fn (): IdentityCsvResource => new IdentityCsvResource($resource));
+            }
+        });
 
         $this->app->make(Router::class)->aliasMiddleware('active', EnsureAccountIsActive::class);
 

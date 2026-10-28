@@ -1,0 +1,14 @@
+{
+    "name": "lms/notifications",
+    "description": "Recipient inbox",
+    "autoload": {
+        "psr-4": {
+            "Modules\\Notifications\\": "app/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Modules\\Notifications\\Tests\\": "tests/"
+        }
+    }
+}
